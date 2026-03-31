@@ -55,7 +55,7 @@ function expandUser(filepath: string): string {
 }
 
 function getToday(): string {
-  return new Date().toISOString().split("T")[0]; // YYYY-MM-DD
+  return new Date().toLocaleDateString("en-CA", { timeZone: "Australia/Melbourne" });
 }
 
 function log(...args: unknown[]): void {
