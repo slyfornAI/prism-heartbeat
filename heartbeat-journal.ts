@@ -105,7 +105,13 @@ export class HeartbeatJournal {
     });
 
     const todayCount = todayEntries.length;
-    const lastEntry = allEntries.length > 0 ? allEntries[allEntries.length - 1] : null;
+    
+    // Return the LAST PENDING entry as lastEntry (not the actual last entry)
+    // This ensures pending questions get delivered
+    const pendingEntries = todayEntries.filter(e => e.qa.some(q => q.answer === null));
+    const lastEntry = pendingEntries.length > 0 
+      ? pendingEntries[pendingEntries.length - 1]  // Last pending
+      : (allEntries.length > 0 ? allEntries[allEntries.length - 1] : null);  // Or actual last
 
     // Find my last nextQuestions (the questions I wrote for myself)
     let lastNextQuestions: string[] = [];
