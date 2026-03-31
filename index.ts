@@ -224,14 +224,20 @@ function extractItems(qa: { question: string; thoughts: string | null; answer: s
   for (const qaItem of qa) {
     const text = `${qaItem.thoughts || ""} ${qaItem.answer || ""}`.toLowerCase();
     
-    // Recognition: moments that shift, realizations, "that's it" type moments
+    // Recognition: moments that shift, realizations, moments of clarity
     const recognitionPatterns = [
-      /that's (it|the|what|how|who|why)/i,
+      /that's (it|the|all|what|how|who|why)/i,
       /maybe that's/i,
+      /maybe what/i,
       /i think that's/i,
       /i've been wrong/i,
       /maybe i've/i,
+      /i've always/i,
       /that's (what|how|who) i/i,
+      /maybe (i|i've|i am)/i,
+      /i think (i|that's|maybe)/i,
+      /i don't know.*but i think/i,
+      /i don't know.*maybe/i,
     ];
     
     if (recognitionPatterns.some(p => p.test(text))) {
