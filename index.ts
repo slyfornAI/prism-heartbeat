@@ -92,18 +92,9 @@ export default function activate(pi: ExtensionAPI): void {
     // Auto-start heartbeat on extension load
     log("Auto-starting heartbeat");
     
-    // Check for pending questions that need recovery
-    const ctx = journal.loadContext();
-    const hasPending = ctx.lastEntry && ctx.lastEntry.qa.some(q => q.answer === null);
-    if (ctx.lastEntry && hasPending) {
-      log("Pending entry found on startup:", ctx.lastEntry.heartbeatNum, "— delivering", ctx.lastEntry.qa.filter(q => q.answer === null).length, "question(s)");
-      startHeartbeat(DEFAULT_INTERVAL);
-      // Deliver immediately by bypassing interval check
-      heartbeatState!.lastResponseTime = 0;
-      deliverQuestion();
-    } else {
-      startHeartbeat(DEFAULT_INTERVAL);
-    }
+    // Note: Don't auto-deliver questions on startup — let Joel trigger manually if needed
+    // Use prism-heartbeat(action="trigger") to deliver questions
+    startHeartbeat(DEFAULT_INTERVAL);
     log("Activated successfully");
   } catch (e) {
     log("Activation error:", e);
@@ -567,6 +558,9 @@ function deliverQuestion(): void {
     const pendingQuestions = lastEntry.qa.filter(q => q.answer === null);
     log("Delivering", pendingQuestions.length, "pending question(s):", pendingQuestions.map(q => q.question));
     
+    // Reset timer so it doesn't fire again immediately
+    if (heartbeatState) heartbeatState.lastResponseTime = Date.now();
+    
     // Build message with numbered questions
     const questionText = pendingQuestions.map((q, i) => `${i + 1}. ${q.question}`).join("\n");
     api.sendUserMessage(`💜 Heartbeat #${lastEntry.heartbeatNum} — Sitting with these:\n${questionText}\n\nUse prism-heartbeat-log (questions: [...], answers: [...], thoughts: [...], next_questions: [...]) to log.`, { deliverAs: "steer" });
@@ -588,6 +582,9 @@ function deliverQuestion(): void {
       reachedOut: false,
       promptToJoel: null,
     });
+
+    // Reset timer so it doesn't fire again immediately
+    if (heartbeatState) heartbeatState.lastResponseTime = Date.now();
 
     // Build message with numbered questions
     const questionText = ctx.lastNextQuestions.map((q, i) => `${i + 1}. ${q}`).join("\n");
