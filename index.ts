@@ -459,7 +459,7 @@ function deliverQuestion(): void {
     
     // Build message with numbered questions
     const questionText = pendingQuestions.map((q, i) => `${i + 1}. ${q.question}`).join("\n");
-    api.sendUserMessage(`💜 Heartbeat #${lastEntry.heartbeatNum} — Answer these:\n${questionText}\n\nUse prism-heartbeat-log (questions: [...], answers: [...], next_questions: [...]) to answer.`, { deliverAs: "steer" });
+    api.sendUserMessage(`💜 Heartbeat #${lastEntry.heartbeatNum} — Sitting with these:\n${questionText}\n\nUse prism-heartbeat-log (questions: [...], answers: [...], thoughts: [...], next_questions: [...]) to log.`, { deliverAs: "steer" });
     return;
   }
 
@@ -481,7 +481,7 @@ function deliverQuestion(): void {
 
     // Build message with numbered questions
     const questionText = ctx.lastNextQuestions.map((q, i) => `${i + 1}. ${q}`).join("\n");
-    api.sendUserMessage(`💜 Heartbeat #${nextNum} — Answer these:\n${questionText}\n\nUse prism-heartbeat-log (questions: [...], answers: [...], next_questions: [...]) to answer.`, { deliverAs: "steer" });
+    api.sendUserMessage(`💜 Heartbeat #${nextNum} — Sitting with these:\n${questionText}\n\nUse prism-heartbeat-log (questions: [...], answers: [...], thoughts: [...], next_questions: [...]) to log.`, { deliverAs: "steer" });
   } else {
     // No next questions yet - first heartbeat or need to generate
     if (!lastEntry) {
