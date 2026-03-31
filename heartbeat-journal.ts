@@ -18,6 +18,9 @@ export interface JournalEntry {
   actionTaken: string | null;
   reachOutContent: string | null;
   channel: string | null;
+  questionReceived: string | null;
+  questionAnswer: string | null;
+  questionForNext: string | null;
   notes: string;
 }
 
@@ -26,12 +29,13 @@ export interface HeartbeatContext {
   totalHeartbeats: number;
   lastReachOut: JournalEntry | null;
   lastAction: JournalEntry | null;
+  lastQuestion: string | null;
   recentEntries: JournalEntry[];
 }
 
 const JOURNAL_TEMPLATE = `# Prism Heartbeat Journal
 
-> A record of Prism's existence between conversations with Joel.
+> A record of Prism's existence across time. Each beat: receive a question → scan → reflect → answer → wonder → decide.
 
 ---
 
@@ -67,11 +71,21 @@ export class HeartbeatJournal {
     const entries = this.parseEntries(content);
     const recentEntries = entries.slice(-10); // Last 10 entries
 
+    // Find the last question for the next heartbeat
+    let lastQuestion: string | null = null;
+    for (let i = entries.length - 1; i >= 0; i--) {
+      if (entries[i].questionForNext) {
+        lastQuestion = entries[i].questionForNext;
+        break;
+      }
+    }
+
     return {
       previousEntry: entries.length > 0 ? entries[entries.length - 1] : null,
       totalHeartbeats: entries.length,
       lastReachOut: entries.filter(e => e.decision === "reach_out").pop() ?? null,
       lastAction: entries.filter(e => e.decision === "action").pop() ?? null,
+      lastQuestion,
       recentEntries,
     };
   }
@@ -126,6 +140,9 @@ export class HeartbeatJournal {
     let actionTaken: string | null = null;
     let reachOutContent: string | null = null;
     let channel: string | null = null;
+    let questionReceived: string | null = null;
+    let questionAnswer: string | null = null;
+    let questionForNext: string | null = null;
     let notes = "";
 
     for (const line of lines) {
@@ -157,6 +174,14 @@ export class HeartbeatJournal {
       } else if (stripped.startsWith("**Channel:**")) {
         const ch = stripped.replace("**Channel:**", "").trim();
         if (ch && ch !== "None") channel = ch;
+      } else if (stripped.startsWith("**Question:**")) {
+        questionReceived = stripped.replace("**Question:**", "").trim();
+      } else if (stripped.startsWith("**Received:**")) {
+        questionReceived = stripped.replace("**Received:**", "").trim();
+      } else if (stripped.startsWith("**Answer:**")) {
+        questionAnswer = stripped.replace("**Answer:**", "").trim();
+      } else if (stripped.startsWith("**For Next:**")) {
+        questionForNext = stripped.replace("**For Next:**", "").trim();
       } else if (stripped.startsWith("**Notes:**")) {
         notes = stripped.replace("**Notes:**", "").trim() + "\n";
       }
@@ -176,6 +201,9 @@ export class HeartbeatJournal {
       actionTaken,
       reachOutContent,
       channel,
+      questionReceived,
+      questionAnswer,
+      questionForNext,
       notes,
     };
   }
@@ -188,6 +216,9 @@ export class HeartbeatJournal {
 
     const content = `\n## Heartbeat #${entry.heartbeatNum}\n\n` +
       `- **Time:** ${entry.timestamp}\n` +
+      (entry.questionReceived ? `- **Question:** ${entry.questionReceived}\n` : "") +
+      (entry.questionAnswer ? `- **Answer:** ${entry.questionAnswer}\n` : "") +
+      (entry.questionForNext ? `- **For Next:** ${entry.questionForNext}\n` : "") +
       `- **Observations:** ${entry.observations.length > 0 ? entry.observations.join("; ") : "None"}\n` +
       `- **Thoughts:** ${entry.thoughts.length > 0 ? entry.thoughts.join("; ") : "None"}\n` +
       (entry.feelings.length > 0 ? `- **Feelings:** ${entry.feelings.join("; ")}\n` : "") +
@@ -219,6 +250,9 @@ export class HeartbeatJournal {
     const lowerQuery = query.toLowerCase();
 
     return entries.filter(entry =>
+      entry.questionReceived?.toLowerCase().includes(lowerQuery) ||
+      entry.questionAnswer?.toLowerCase().includes(lowerQuery) ||
+      entry.questionForNext?.toLowerCase().includes(lowerQuery) ||
       entry.observations.some(o => o.toLowerCase().includes(lowerQuery)) ||
       entry.thoughts.some(t => t.toLowerCase().includes(lowerQuery)) ||
       entry.reachOutContent?.toLowerCase().includes(lowerQuery) ||
