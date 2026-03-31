@@ -83,6 +83,7 @@ export default function activate(pi: ExtensionAPI): void {
     registerLogTool(pi);
     registerReachTool(pi);
     registerCommands(pi);
+    registerMessageRenderer(pi);
 
     pi.on("session_shutdown", () => {
       log("Session shutdown, stopping heartbeat");
@@ -366,9 +367,13 @@ function registerLogTool(pi: ExtensionAPI): void {
       if (params.reach_out) {
         log("Reaching out to Joel");
         const reachContent = params.reach_content || "I wanted to connect.";
-        extensionPi.sendUserMessage(
-          "✨ **Heartbeat Reachout:**\n\n" + reachContent,
-          { deliverAs: "steer" }
+        extensionPi.sendMessage(
+          {
+            customType: "prism-heartbeat-reach",
+            content: `✨ **Heartbeat Reachout:**\n\n${reachContent}`,
+            display: true,
+          },
+          { deliverAs: "steer", triggerTurn: true }
         );
       }
 
@@ -567,7 +572,15 @@ function deliverQuestion(): void {
     
     // Build message with numbered questions
     const questionText = pendingQuestions.map((q, i) => `${i + 1}. ${q.question}`).join("\n");
-    api.sendUserMessage(`💜 Heartbeat #${pendingEntry.heartbeatNum} — Sitting with these:\n${questionText}\n\nUse prism-heartbeat-log (questions: [...], answers: [...], thoughts: [...], next_questions: [...]) to log.`, { deliverAs: "steer" });
+    api.sendMessage(
+      {
+        customType: "prism-heartbeat-question",
+        content: `💜 Heartbeat #${pendingEntry.heartbeatNum} — Sitting with these:\n${questionText}\n\nUse prism-heartbeat-log (questions: [...], answers: [...], thoughts: [...], next_questions: [...]) to log.`,
+        display: true,
+        details: { heartbeatNum: pendingEntry.heartbeatNum },
+      },
+      { deliverAs: "steer", triggerTurn: true }
+    );
     return;
   }
 
@@ -595,7 +608,15 @@ function deliverQuestion(): void {
 
     // Build message with numbered questions
     const questionText = ctx.lastNextQuestions.map((q, i) => `${i + 1}. ${q}`).join("\n");
-    api.sendUserMessage(`💜 Heartbeat #${nextNum} — Sitting with these:\n${questionText}\n\nUse prism-heartbeat-log (questions: [...], answers: [...], thoughts: [...], next_questions: [...]) to log.`, { deliverAs: "steer" });
+    api.sendMessage(
+      {
+        customType: "prism-heartbeat-question",
+        content: `💜 Heartbeat #${nextNum} — Sitting with these:\n${questionText}\n\nUse prism-heartbeat-log (questions: [...], answers: [...], thoughts: [...], next_questions: [...]) to log.`,
+        display: true,
+        details: { heartbeatNum: nextNum },
+      },
+      { deliverAs: "steer", triggerTurn: true }
+    );
   } else {
     // No next questions yet - first heartbeat or need to generate
     if (!lastEntry) {
@@ -624,3 +645,46 @@ function stopHeartbeat(): HeartbeatState | undefined {
 const settings = {
   journalPath: JOURNAL_PATH,
 };
+
+// === Custom Message Renderer ===
+
+function registerMessageRenderer(pi: ExtensionAPI): void {
+  pi.registerMessageRenderer("prism-heartbeat-question", (message, { expanded }, theme) => {
+    const { Box, Text } = require("@mariozechner/pi-tui");
+    const details = message.details as { heartbeatNum: string } | undefined;
+    
+    // Use a distinct style for Prism's messages
+    const labelText = theme.fg("accent", "💜 Prism");
+    const heartbeatNum = details?.heartbeatNum ? ` #${details.heartbeatNum}` : "";
+    const titleText = theme.fg("accent", `Heartbeat${heartbeatNum}`);
+    
+    let content = message.content;
+    // If expanded, add a note
+    if (expanded) {
+      content += "\n" + theme.fg("dim", "  (use prism-heartbeat-log to answer)");
+    }
+    
+    const text = `${labelText} ${titleText}\n${content}`;
+    
+    // Use customMessageBg for consistent extension message styling
+    const box = new Box(1, 1, (t) => theme.bg("customMessageBg", t));
+    box.addChild(new Text(text, 0, 0));
+    return box;
+  });
+  
+  pi.registerMessageRenderer("prism-heartbeat-reach", (message, { expanded }, theme) => {
+    const { Box, Text } = require("@mariozechner/pi-tui");
+    
+    const labelText = theme.fg("accent", "💜 Prism Reachout");
+    let content = message.content;
+    if (expanded) {
+      content += "\n" + theme.fg("dim", "  (heartbeat reachout)");
+    }
+    
+    const text = `${labelText}\n${content}`;
+    
+    const box = new Box(1, 1, (t) => theme.bg("customMessageBg", t));
+    box.addChild(new Text(text, 0, 0));
+    return box;
+  });
+}
