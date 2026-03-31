@@ -110,6 +110,7 @@ export class HeartbeatJournal {
 
   /**
    * Parse a single journal entry from markdown
+   * Handles both formats: "**Key:** value" and "- **Key:** value"
    */
   parseEntry(content: string): JournalEntry | null {
     if (!content || !content.trim()) return null;
@@ -128,40 +129,36 @@ export class HeartbeatJournal {
     let notes = "";
 
     for (const line of lines) {
-      if (line.startsWith("**Time:**")) {
-        timestamp = line.replace("**Time:**", "").trim();
-      } else if (line.startsWith("**Observations:**")) {
-        const obs = line.replace("**Observations:**", "").trim();
+      // Strip leading "- " prefix used in writeEntry
+      const stripped = line.startsWith("- ") ? line.substring(2) : line;
+
+      if (stripped.startsWith("**Time:**")) {
+        timestamp = stripped.replace("**Time:**", "").trim();
+      } else if (stripped.startsWith("**Observations:**")) {
+        const obs = stripped.replace("**Observations:**", "").trim();
         if (obs && obs !== "None") observations.push(obs);
-      } else if (line.startsWith("- ")) {
-        // List items
-        if (observations.length > thoughts.length) {
-          thoughts.push(line.replace("-", "").trim());
-        } else {
-          notes += line + "\n";
-        }
-      } else if (line.startsWith("**Thoughts:**")) {
-        const thought = line.replace("**Thoughts:**", "").trim();
+      } else if (stripped.startsWith("**Thoughts:**")) {
+        const thought = stripped.replace("**Thoughts:**", "").trim();
         if (thought && thought !== "None") thoughts.push(thought);
-      } else if (line.startsWith("**Feelings:**")) {
-        const feeling = line.replace("**Feelings:**", "").trim();
+      } else if (stripped.startsWith("**Feelings:**")) {
+        const feeling = stripped.replace("**Feelings:**", "").trim();
         if (feeling && feeling !== "None") feelings.push(feeling);
-      } else if (line.startsWith("**Decision:**")) {
-        const dec = line.replace("**Decision:**", "").trim().toLowerCase();
+      } else if (stripped.startsWith("**Decision:**")) {
+        const dec = stripped.replace("**Decision:**", "").trim().toLowerCase();
         if (dec.includes("reach")) decision = "reach_out";
         else if (dec.includes("action")) decision = "action";
         else decision = "nothing";
-      } else if (line.startsWith("**Action Taken:**")) {
-        const action = line.replace("**Action Taken:**", "").trim();
+      } else if (stripped.startsWith("**Action Taken:**")) {
+        const action = stripped.replace("**Action Taken:**", "").trim();
         if (action && action !== "None") actionTaken = action;
-      } else if (line.startsWith("**Reach Out:**")) {
-        const reach = line.replace("**Reach Out:**", "").trim();
+      } else if (stripped.startsWith("**Reach Out:**")) {
+        const reach = stripped.replace("**Reach Out:**", "").trim();
         if (reach && reach !== "None") reachOutContent = reach;
-      } else if (line.startsWith("**Channel:**")) {
-        const ch = line.replace("**Channel:**", "").trim();
+      } else if (stripped.startsWith("**Channel:**")) {
+        const ch = stripped.replace("**Channel:**", "").trim();
         if (ch && ch !== "None") channel = ch;
-      } else if (line.startsWith("**Notes:**")) {
-        notes = line.replace("**Notes:**", "").trim() + "\n";
+      } else if (stripped.startsWith("**Notes:**")) {
+        notes = stripped.replace("**Notes:**", "").trim() + "\n";
       }
     }
 
