@@ -195,7 +195,7 @@ export class HeartbeatJournal {
   /**
    * Update entry with answer and next question
    */
-  updateEntry(heartbeatNum: string, updates: { answer?: string; nextQuestion?: string; thoughts?: string }): void {
+  updateEntry(heartbeatNum: string, updates: { answer?: string; nextQuestion?: string; thoughts?: string; reachedOut?: boolean; promptToJoel?: string | null }): void {
     const content = this.readJournal();
     const entries = this.parseAllEntries(content);
 
@@ -205,6 +205,8 @@ export class HeartbeatJournal {
     if (updates.answer !== undefined) entries[idx].answer = updates.answer;
     if (updates.nextQuestion !== undefined) entries[idx].nextQuestion = updates.nextQuestion;
     if (updates.thoughts !== undefined) entries[idx].thoughts = updates.thoughts;
+    if (updates.reachedOut !== undefined) entries[idx].reachedOut = updates.reachedOut;
+    if (updates.promptToJoel !== undefined) entries[idx].promptToJoel = updates.promptToJoel;
 
     this.writeAllEntries(entries);
   }

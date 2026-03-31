@@ -240,6 +240,8 @@ function registerLogTool(pi: ExtensionAPI): void {
         answer: params.answer,
         nextQuestion: params.next_question,
         thoughts: params.thoughts || null,
+        reachedOut: !!params.reach_out,
+        promptToJoel: params.reach_out ? (params.reach_content || "I wanted to connect.") : null,
       });
       log("Logged answer for", lastEntry.heartbeatNum);
 
