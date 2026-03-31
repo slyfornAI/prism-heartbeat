@@ -296,7 +296,7 @@ function extractItems(qa: { question: string; thoughts: string | null; answer: s
 }
 
 function saveToTracker(item: ExtractedItem): void {
-  const trackerPath = expandUser(`${TRACK_BASE_PATH}/${item.type}s.md`);
+  const trackerPath = expandUser(`${TRACK_BASE_PATH}/${item.type}.md`);
   const timestamp = new Date().toISOString();
   
   let entry = `\n## ${timestamp}\n\n${item.content}\n\n*significance: ${item.significance}/10*\n*source: heartbeat*\n\n---\n`;
