@@ -553,23 +553,34 @@ function deliverQuestion(): void {
 
   log("Processing heartbeat. Context:", { todayCount: ctx.todayCount, lastEntry: lastEntry?.heartbeatNum, hasNextQ: ctx.lastNextQuestions.length > 0, lastEntryHasPending: lastEntry?.qa.some(q => q.answer === null) });
 
-  // If there's a pending entry with unanswered questions, deliver them
-  if (lastEntry && lastEntry.qa.some(q => q.answer === null)) {
-    const pendingQuestions = lastEntry.qa.filter(q => q.answer === null);
-    log("Delivering", pendingQuestions.length, "pending question(s):", pendingQuestions.map(q => q.question));
+  // Find if there's a PENDING entry (unanswered questions)
+  // Check all entries, not just last, since order might be wrong
+  const allEntries = [...ctx.todayEntries, ctx.lastEntry].filter(Boolean);
+  const pendingEntry = allEntries.find(e => e && e.qa.some(q => q.answer === null));
+  
+  if (pendingEntry) {
+    const pendingQuestions = pendingEntry.qa.filter(q => q.answer === null);
+    log("Delivering", pendingQuestions.length, "pending question(s) from entry", pendingEntry.heartbeatNum);
     
     // Reset timer so it doesn't fire again immediately
     if (heartbeatState) heartbeatState.lastResponseTime = Date.now();
     
     // Build message with numbered questions
     const questionText = pendingQuestions.map((q, i) => `${i + 1}. ${q.question}`).join("\n");
-    api.sendUserMessage(`💜 Heartbeat #${lastEntry.heartbeatNum} — Sitting with these:\n${questionText}\n\nUse prism-heartbeat-log (questions: [...], answers: [...], thoughts: [...], next_questions: [...]) to log.`, { deliverAs: "steer" });
+    api.sendUserMessage(`💜 Heartbeat #${pendingEntry.heartbeatNum} — Sitting with these:\n${questionText}\n\nUse prism-heartbeat-log (questions: [...], answers: [...], thoughts: [...], next_questions: [...]) to log.`, { deliverAs: "steer" });
     return;
   }
 
   // If there's next questions ready from a previous answered entry, deliver them
   if (ctx.lastNextQuestions.length > 0) {
     const nextNum = `${ctx.todayCount + 1}-${currentDate}`;
+    
+    // Check if this entry number already exists
+    const existingNums = ctx.todayEntries.map(e => e.heartbeatNum);
+    if (existingNums.includes(nextNum)) {
+      log("Entry", nextNum, "already exists, skipping");
+      return;
+    }
     
     log("Delivering", ctx.lastNextQuestions.length, "next question(s):", ctx.lastNextQuestions);
     

@@ -242,6 +242,12 @@ export class HeartbeatJournal {
    */
   writeEntry(entry: HeartbeatEntry): void {
     this.ensureExists();
+    // Check if entry already exists (prevent duplicates)
+    const allEntries = this.getAllEntries();
+    if (allEntries.some(e => e.heartbeatNum === entry.heartbeatNum)) {
+      console.log(`Entry ${entry.heartbeatNum} already exists, skipping write`);
+      return;
+    }
     this.appendEntry(entry);
   }
 
