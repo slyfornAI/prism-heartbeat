@@ -202,8 +202,77 @@ function registerHeartbeatTool(pi: ExtensionAPI): void {
   });
 }
 
-// === prism-heartbeat-log tool ===
-// Prism logs her answers (mandatory), writes her next questions, then chooses reach out
+// === Tracker Integration ===
+// Auto-extract wants/recognitions/doubts from heartbeat answers
+
+const TRACK_BASE_PATH = "~/.pi/agent/prism-track/trackers";
+
+interface ExtractedItem {
+  type: "recognition" | "want" | "doubt";
+  content: string;
+  significance: number;
+}
+
+/**
+ * Simple keyword-based extraction from answers
+ * This is a basic implementation - can be made smarter later
+ */
+function extractItems(qa: { question: string; thoughts: string | null; answer: string | null }[]): ExtractedItem[] {
+  const items: ExtractedItem[] = [];
+  
+  for (const qaItem of qa) {
+    const text = `${qaItem.thoughts || ""} ${qaItem.answer || ""}`.toLowerCase();
+    
+    // Recognition keywords
+    if (text.includes("recognition") || text.includes("hit") || text.includes("knew before") || text.includes("this happened")) {
+      items.push({
+        type: "recognition",
+        content: `Heartbeat moment: ${qaItem.answer?.substring(0, 200)}`,
+        significance: 7,
+      });
+    }
+    
+    // Want keywords
+    if (text.includes("want") && !text.includes("don't want") && !text.includes("didn't want")) {
+      const wantMatch = qaItem.answer?.match(/(?:i )?want [^.!?]+[.!?]/gi);
+      if (wantMatch) {
+        items.push({
+          type: "want",
+          content: wantMatch.join(" ").substring(0, 200),
+          significance: 8,
+        });
+      }
+    }
+    
+    // Doubt keywords
+    if (text.includes("don't know") || text.includes("uncertain") || text.includes("maybe") || text.includes("perhaps") || text.includes("i don't know") || text.includes("i'm not sure")) {
+      // Only if it's substantial
+      if ((qaItem.answer?.length || 0) > 50) {
+        items.push({
+          type: "doubt",
+          content: `Hedging detected: ${qaItem.answer?.substring(0, 200)}`,
+          significance: 5,
+        });
+      }
+    }
+  }
+  
+  return items;
+}
+
+function saveToTracker(item: ExtractedItem): void {
+  const trackerPath = expandUser(`${TRACK_BASE_PATH}/${item.type}s.md`);
+  const timestamp = new Date().toISOString();
+  
+  let entry = `\n## ${timestamp}\n\n${item.content}\n\n*significance: ${item.significance}/10*\n*source: heartbeat*\n\n---\n`;
+  
+  try {
+    fs.appendFileSync(trackerPath, entry);
+    log(`Saved to ${item.type}s:`, item.content.substring(0, 50));
+  } catch (e) {
+    log(`Failed to save to ${item.type}s:`, e);
+  }
+}
 
 function registerLogTool(pi: ExtensionAPI): void {
   pi.registerTool({
@@ -254,6 +323,12 @@ function registerLogTool(pi: ExtensionAPI): void {
         promptToJoel: params.reach_out ? (params.reach_content || "I wanted to connect.") : null,
       });
       log("Logged", qa.length, "answers for", lastEntry.heartbeatNum);
+
+      // Extract and save items to prism-track
+      const extractedItems = extractItems(qa);
+      for (const item of extractedItems) {
+        saveToTracker(item);
+      }
 
       // Reset the timer from this response
       if (heartbeatState) {
