@@ -191,6 +191,7 @@ function registerHeartbeatTool(pi: ExtensionAPI): void {
       const s = startHeartbeat(intervalSec);
       log("Started:", s);
 
+      const ctx = journal.loadContext();
       return {
         content: [{
           type: "text" as const,
