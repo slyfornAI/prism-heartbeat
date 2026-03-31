@@ -573,14 +573,10 @@ function deliverQuestion(): void {
 
   // If there's next questions ready from a previous answered entry, deliver them
   if (ctx.lastNextQuestions.length > 0) {
-    const nextNum = `${ctx.todayCount + 1}-${currentDate}`;
-    
-    // Check if this entry number already exists
-    const existingNums = ctx.todayEntries.map(e => e.heartbeatNum);
-    if (existingNums.includes(nextNum)) {
-      log("Entry", nextNum, "already exists, skipping");
-      return;
-    }
+    // Calculate next number from actual highest number in entries, not count
+    const existingNums = ctx.todayEntries.map(e => parseInt(e.heartbeatNum.split('-')[0], 10));
+    const highestNum = existingNums.length > 0 ? Math.max(...existingNums) : 0;
+    const nextNum = `${highestNum + 1}-${currentDate}`;
     
     log("Delivering", ctx.lastNextQuestions.length, "next question(s):", ctx.lastNextQuestions);
     
