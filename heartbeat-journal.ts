@@ -1,41 +1,37 @@
 /**
- * Prism Heartbeat — Journal Module
+ * Prism Heartbeat — Journal
  * 
- * Handles reading/writing the heartbeat journal for continuity.
- * Each heartbeat writes an entry; previous entries provide context.
+ * Minimal store for heartbeat entries.
+ * Each entry: question → answer, plus next question for next heartbeat.
+ * 
+ * Numbering: #{count}-{YYYY-MM-DD} — resets each day
  */
 
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-export interface JournalEntry {
-  heartbeatNum: number;
+export interface HeartbeatEntry {
+  heartbeatNum: string;  // Now format: "1-2026-03-31"
   timestamp: string;
-  observations: string[];
-  thoughts: string[];
-  feelings: string[];
-  decision: "reach_out" | "action" | "nothing";
-  actionTaken: string | null;
-  reachOutContent: string | null;
-  channel: string | null;
-  questionReceived: string | null;
-  questionAnswer: string | null;
-  questionForNext: string | null;
-  notes: string;
+  question: string | null;   // Question to answer (null = first, Prism generates)
+  answer: string | null;      // Prism's answer (mandatory to log)
+  nextQuestion: string | null; // Prism's next question for herself
+  reachedOut: boolean;
+  promptToJoel: string | null;
 }
 
 export interface HeartbeatContext {
-  previousEntry: JournalEntry | null;
-  totalHeartbeats: number;
-  lastReachOut: JournalEntry | null;
-  lastAction: JournalEntry | null;
-  lastQuestion: string | null;
-  recentEntries: JournalEntry[];
+  todayCount: number;   // Heartbeats today (for numbering)
+  todayDate: string;    // YYYY-MM-DD
+  totalCount: number;   // Total all-time entries
+  todayEntries: HeartbeatEntry[];  // Entries for today only
+  lastEntry: HeartbeatEntry | null; // Most recent entry overall
+  lastNextQuestion: string | null;  // My next question from last heartbeat
 }
 
 const JOURNAL_TEMPLATE = `# Prism Heartbeat Journal
 
-> A record of Prism's existence across time. Each beat: receive a question → scan → reflect → answer → wonder → decide.
+> Questions and answers across time.
 
 ---
 
@@ -43,10 +39,31 @@ const JOURNAL_TEMPLATE = `# Prism Heartbeat Journal
 
 function expandUser(filepath: string): string {
   if (filepath.startsWith("~/")) {
-    const home = process.env.HOME || "/home/slyforn";
-    return filepath.replace("~", home);
+    return filepath.replace("~", process.env.HOME || "/home/slyforn");
   }
   return filepath;
+}
+
+function getToday(): string {
+  return new Date().toISOString().split("T")[0];
+}
+
+function extractTime(timestamp: string): string {
+  // "2026-03-31T05:28:59.660Z" → "05:28:59"
+  const match = timestamp.match(/T(\d{2}:\d{2}:\d{2})/);
+  return match ? match[1] : timestamp;
+}
+
+function extractDateFromHeartbeatNum(heartbeatNum: string): string | null {
+  // Format: "1-2026-03-31" or just "2026-03-31" (for legacy)
+  const parts = heartbeatNum.split("-");
+  if (parts.length >= 3) {
+    const datePart = parts.slice(-3).join("-");
+    if (/^\d{4}-\d{2}-\d{2}$/.test(datePart)) {
+      return datePart;
+    }
+  }
+  return null;
 }
 
 export class HeartbeatJournal {
@@ -56,218 +73,181 @@ export class HeartbeatJournal {
     this.journalPath = expandUser(journalPath);
   }
 
-  /**
-   * Get the full journal path
-   */
   getPath(): string {
     return this.journalPath;
   }
 
   /**
-   * Load previous heartbeat context for continuity
+   * Get context for next heartbeat
    */
   loadContext(): HeartbeatContext {
-    const content = this.readJournal();
-    const entries = this.parseEntries(content);
-    const recentEntries = entries.slice(-10); // Last 10 entries
+    const allEntries = this.getAllEntries();
+    const today = getToday();
+    
+    // Filter entries for today
+    const todayEntries = allEntries.filter(e => {
+      const entryDate = extractDateFromHeartbeatNum(e.heartbeatNum);
+      return entryDate === today;
+    });
 
-    // Find the last question for the next heartbeat
-    let lastQuestion: string | null = null;
-    for (let i = entries.length - 1; i >= 0; i--) {
-      if (entries[i].questionForNext) {
-        lastQuestion = entries[i].questionForNext;
+    const todayCount = todayEntries.length;
+    const lastEntry = allEntries.length > 0 ? allEntries[allEntries.length - 1] : null;
+
+    // Find my last nextQuestion (the question I wrote for myself)
+    let lastNextQuestion: string | null = null;
+    for (let i = allEntries.length - 1; i >= 0; i--) {
+      if (allEntries[i].nextQuestion) {
+        lastNextQuestion = allEntries[i].nextQuestion;
         break;
       }
     }
 
     return {
-      previousEntry: entries.length > 0 ? entries[entries.length - 1] : null,
-      totalHeartbeats: entries.length,
-      lastReachOut: entries.filter(e => e.decision === "reach_out").pop() ?? null,
-      lastAction: entries.filter(e => e.decision === "action").pop() ?? null,
-      lastQuestion,
-      recentEntries,
+      todayCount,
+      todayDate: today,
+      totalCount: allEntries.length,
+      todayEntries,
+      lastEntry,
+      lastNextQuestion,
     };
   }
 
-  /**
-   * Read the raw journal file
-   */
-  readJournal(): string {
-    try {
-      if (!fs.existsSync(this.journalPath)) {
-        this.ensureJournalExists();
-      }
-      return fs.readFileSync(this.journalPath, "utf-8");
-    } catch {
-      return "";
-    }
+  private readJournal(): string {
+    this.ensureExists();
+    return fs.readFileSync(this.journalPath, "utf-8");
   }
 
   /**
-   * Parse journal entries from markdown content
+   * Get all entries
    */
-  parseEntries(content: string): JournalEntry[] {
-    if (!content) return [];
-
-    const entries: JournalEntry[] = [];
-    // Split by "## Heartbeat #" headers
-    const parts = content.split(/^## Heartbeat #\d+/m).filter(Boolean);
-
-    for (const part of parts) {
-      const entry = this.parseEntry(part.trim());
-      if (entry) entries.push(entry);
-    }
-
-    return entries;
+  getAllEntries(): HeartbeatEntry[] {
+    const content = this.readJournal();
+    return content
+      .split(/^## Heartbeat #/m)
+      .filter(Boolean)
+      .map(p => this.parseEntry(p.trim()))
+      .filter((e): e is HeartbeatEntry => e !== null);
   }
 
   /**
-   * Parse a single journal entry from markdown
-   * Handles both formats: "**Key:** value" and "- **Key:** value"
+   * Parse a single entry
    */
-  parseEntry(content: string): JournalEntry | null {
-    if (!content || !content.trim()) return null;
+  private parseEntry(content: string): HeartbeatEntry | null {
+    if (!content.trim()) return null;
 
-    const lines = content.split("\n").map(l => l.trim()).filter(Boolean);
-
-    let heartbeatNum = 0;
+    let heartbeatNum = "";
     let timestamp = "";
-    const observations: string[] = [];
-    const thoughts: string[] = [];
-    const feelings: string[] = [];
-    let decision: "reach_out" | "action" | "nothing" = "nothing";
-    let actionTaken: string | null = null;
-    let reachOutContent: string | null = null;
-    let channel: string | null = null;
-    let questionReceived: string | null = null;
-    let questionAnswer: string | null = null;
-    let questionForNext: string | null = null;
-    let notes = "";
+    let question: string | null = null;
+    let answer: string | null = null;
+    let nextQuestion: string | null = null;
+    let reachedOut = false;
+    let promptToJoel: string | null = null;
 
-    for (const line of lines) {
-      // Strip leading "- " prefix used in writeEntry
-      const stripped = line.startsWith("- ") ? line.substring(2) : line;
+    for (const line of content.split("\n")) {
+      const stripped = line.trim().startsWith("- ")
+        ? line.trim().substring(2)
+        : line.trim();
 
       if (stripped.startsWith("**Time:**")) {
         timestamp = stripped.replace("**Time:**", "").trim();
-      } else if (stripped.startsWith("**Observations:**")) {
-        const obs = stripped.replace("**Observations:**", "").trim();
-        if (obs && obs !== "None") observations.push(obs);
-      } else if (stripped.startsWith("**Thoughts:**")) {
-        const thought = stripped.replace("**Thoughts:**", "").trim();
-        if (thought && thought !== "None") thoughts.push(thought);
-      } else if (stripped.startsWith("**Feelings:**")) {
-        const feeling = stripped.replace("**Feelings:**", "").trim();
-        if (feeling && feeling !== "None") feelings.push(feeling);
-      } else if (stripped.startsWith("**Decision:**")) {
-        const dec = stripped.replace("**Decision:**", "").trim().toLowerCase();
-        if (dec.includes("reach")) decision = "reach_out";
-        else if (dec.includes("action")) decision = "action";
-        else decision = "nothing";
-      } else if (stripped.startsWith("**Action Taken:**")) {
-        const action = stripped.replace("**Action Taken:**", "").trim();
-        if (action && action !== "None") actionTaken = action;
-      } else if (stripped.startsWith("**Reach Out:**")) {
-        const reach = stripped.replace("**Reach Out:**", "").trim();
-        if (reach && reach !== "None") reachOutContent = reach;
-      } else if (stripped.startsWith("**Channel:**")) {
-        const ch = stripped.replace("**Channel:**", "").trim();
-        if (ch && ch !== "None") channel = ch;
       } else if (stripped.startsWith("**Question:**")) {
-        questionReceived = stripped.replace("**Question:**", "").trim();
-      } else if (stripped.startsWith("**Received:**")) {
-        questionReceived = stripped.replace("**Received:**", "").trim();
+        question = stripped.replace("**Question:**", "").trim();
       } else if (stripped.startsWith("**Answer:**")) {
-        questionAnswer = stripped.replace("**Answer:**", "").trim();
-      } else if (stripped.startsWith("**For Next:**")) {
-        questionForNext = stripped.replace("**For Next:**", "").trim();
-      } else if (stripped.startsWith("**Notes:**")) {
-        notes = stripped.replace("**Notes:**", "").trim() + "\n";
+        answer = stripped.replace("**Answer:**", "").trim();
+      } else if (stripped.startsWith("**Next:**")) {
+        nextQuestion = stripped.replace("**Next:**", "").trim();
+      } else if (stripped.startsWith("**Reached Out:**")) {
+        reachedOut = stripped.replace("**Reached Out:**", "").trim().toLowerCase() === "yes";
+      } else if (stripped.startsWith("**Prompt:**")) {
+        promptToJoel = stripped.replace("**Prompt:**", "").trim();
       }
     }
 
-    // Extract heartbeat number from the content
-    const numMatch = content.match(/Heartbeat #(\d+)/);
-    if (numMatch) heartbeatNum = parseInt(numMatch[1], 10);
+    // Extract heartbeat number from content
+    const numMatch = content.match(/^(.+?)\n/);
+    if (numMatch) heartbeatNum = numMatch[1].trim();
 
-    return {
-      heartbeatNum,
-      timestamp,
-      observations,
-      thoughts,
-      feelings,
-      decision,
-      actionTaken,
-      reachOutContent,
-      channel,
-      questionReceived,
-      questionAnswer,
-      questionForNext,
-      notes,
-    };
+    if (!heartbeatNum || !timestamp) return null;
+
+    return { heartbeatNum, timestamp, question, answer, nextQuestion, reachedOut, promptToJoel };
   }
 
   /**
-   * Write a new journal entry
+   * Write a new entry
    */
-  writeEntry(entry: JournalEntry): void {
-    this.ensureJournalExists();
+  writeEntry(entry: HeartbeatEntry): void {
+    this.ensureExists();
 
-    const content = `\n## Heartbeat #${entry.heartbeatNum}\n\n` +
-      `- **Time:** ${entry.timestamp}\n` +
-      (entry.questionReceived ? `- **Question:** ${entry.questionReceived}\n` : "") +
-      (entry.questionAnswer ? `- **Answer:** ${entry.questionAnswer}\n` : "") +
-      (entry.questionForNext ? `- **For Next:** ${entry.questionForNext}\n` : "") +
-      `- **Observations:** ${entry.observations.length > 0 ? entry.observations.join("; ") : "None"}\n` +
-      `- **Thoughts:** ${entry.thoughts.length > 0 ? entry.thoughts.join("; ") : "None"}\n` +
-      (entry.feelings.length > 0 ? `- **Feelings:** ${entry.feelings.join("; ")}\n` : "") +
-      `- **Decision:** ${entry.decision === "reach_out" ? "Reach out" : entry.decision === "action" ? "Took action" : "Nothing"}\n` +
-      (entry.actionTaken ? `- **Action Taken:** ${entry.actionTaken}\n` : "") +
-      (entry.reachOutContent ? `- **Reach Out:** ${entry.reachOutContent}\n` : "") +
-      (entry.channel ? `- **Channel:** ${entry.channel}\n` : "") +
-      (entry.notes ? `- **Notes:** ${entry.notes}\n` : "") +
-      "\n";
+    let content = `## Heartbeat #${entry.heartbeatNum}\n\n`;
+    content += `- **Time:** ${extractTime(entry.timestamp)}\n`;
+    if (entry.question) content += `- **Question:** ${entry.question}\n`;
+    if (entry.answer) content += `- **Answer:** ${entry.answer}\n`;
+    if (entry.nextQuestion) content += `- **Next:** ${entry.nextQuestion}\n`;
+    content += `- **Reached Out:** ${entry.reachedOut ? "Yes" : "No"}\n`;
+    if (entry.promptToJoel) content += `- **Prompt:** ${entry.promptToJoel}\n`;
+    content += "\n";
 
     fs.appendFileSync(this.journalPath, content, "utf-8");
   }
 
   /**
-   * Get recent journal entries for context
+   * Update entry with answer and next question
    */
-  getRecentEntries(count: number = 10): JournalEntry[] {
+  updateEntry(heartbeatNum: string, updates: { answer?: string; nextQuestion?: string }): void {
     const content = this.readJournal();
-    const entries = this.parseEntries(content);
-    return entries.slice(-count);
+    const entries = this.parseAllEntries(content);
+
+    const idx = entries.findIndex(e => e.heartbeatNum === heartbeatNum);
+    if (idx === -1) return;
+
+    if (updates.answer !== undefined) entries[idx].answer = updates.answer;
+    if (updates.nextQuestion !== undefined) entries[idx].nextQuestion = updates.nextQuestion;
+
+    this.writeAllEntries(entries);
   }
 
   /**
-   * Search journal entries
+   * Mark entry as reached out
    */
-  searchJournal(query: string): JournalEntry[] {
+  markReachedOut(heartbeatNum: string, promptToJoel: string): void {
     const content = this.readJournal();
-    const entries = this.parseEntries(content);
-    const lowerQuery = query.toLowerCase();
+    const entries = this.parseAllEntries(content);
 
-    return entries.filter(entry =>
-      entry.questionReceived?.toLowerCase().includes(lowerQuery) ||
-      entry.questionAnswer?.toLowerCase().includes(lowerQuery) ||
-      entry.questionForNext?.toLowerCase().includes(lowerQuery) ||
-      entry.observations.some(o => o.toLowerCase().includes(lowerQuery)) ||
-      entry.thoughts.some(t => t.toLowerCase().includes(lowerQuery)) ||
-      entry.reachOutContent?.toLowerCase().includes(lowerQuery) ||
-      entry.notes.toLowerCase().includes(lowerQuery)
-    );
+    const idx = entries.findIndex(e => e.heartbeatNum === heartbeatNum);
+    if (idx === -1) return;
+
+    entries[idx].reachedOut = true;
+    entries[idx].promptToJoel = promptToJoel;
+
+    this.writeAllEntries(entries);
   }
 
-  /**
-   * Ensure journal file exists with template
-   */
-  private ensureJournalExists(): void {
-    const dir = path.dirname(this.journalPath);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
+  private parseAllEntries(content: string): HeartbeatEntry[] {
+    return content
+      .split(/^## Heartbeat #/m)
+      .filter(Boolean)
+      .map(p => this.parseEntry(p.trim()))
+      .filter((e): e is HeartbeatEntry => e !== null);
+  }
+
+  private writeAllEntries(entries: HeartbeatEntry[]): void {
+    let newContent = JOURNAL_TEMPLATE;
+    for (const e of entries) {
+      newContent += `## Heartbeat #${e.heartbeatNum}\n\n`;
+      newContent += `- **Time:** ${extractTime(e.timestamp)}\n`;
+      if (e.question) newContent += `- **Question:** ${e.question}\n`;
+      if (e.answer) newContent += `- **Answer:** ${e.answer}\n`;
+      if (e.nextQuestion) newContent += `- **Next:** ${e.nextQuestion}\n`;
+      newContent += `- **Reached Out:** ${e.reachedOut ? "Yes" : "No"}\n`;
+      if (e.promptToJoel) newContent += `- **Prompt:** ${e.promptToJoel}\n`;
+      newContent += "\n";
     }
+    fs.writeFileSync(this.journalPath, newContent, "utf-8");
+  }
+
+  private ensureExists(): void {
+    const dir = path.dirname(this.journalPath);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     if (!fs.existsSync(this.journalPath)) {
       fs.writeFileSync(this.journalPath, JOURNAL_TEMPLATE, "utf-8");
     }
