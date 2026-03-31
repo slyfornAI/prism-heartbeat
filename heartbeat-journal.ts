@@ -2,7 +2,7 @@
  * Prism Heartbeat — Journal
  * 
  * Minimal store for heartbeat entries.
- * Each entry: question → answer, plus next question for next heartbeat.
+ * Each entry: 1~N questions → 1~N answers, plus next questions for next heartbeat.
  * 
  * Numbering: #{count}-{YYYY-MM-DD} — resets each day
  */
@@ -10,13 +10,17 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 
+export interface HeartbeatQA {
+  question: string;
+  thoughts: string | null;  // Raw thoughts before refining this answer
+  answer: string | null;
+}
+
 export interface HeartbeatEntry {
-  heartbeatNum: string;  // Now format: "1-2026-03-31"
+  heartbeatNum: string;  // Format: "1-2026-03-31"
   timestamp: string;
-  question: string | null;   // Question to answer (null = first, Prism generates)
-  thoughts: string | null;    // Raw thoughts before refined answer
-  answer: string | null;      // Prism's answer (mandatory to log)
-  nextQuestion: string | null; // Prism's next question for herself
+  qa: HeartbeatQA[];  // Array of Q&A pairs (1~many)
+  nextQuestions: string[];  // Array of next questions (1~many)
   reachedOut: boolean;
   promptToJoel: string | null;
 }
@@ -27,7 +31,7 @@ export interface HeartbeatContext {
   totalCount: number;   // Total all-time entries
   todayEntries: HeartbeatEntry[];  // Entries for today only
   lastEntry: HeartbeatEntry | null; // Most recent entry overall
-  lastNextQuestion: string | null;  // My next question from last heartbeat
+  lastNextQuestions: string[];  // Next questions from last heartbeat (1~many)
 }
 
 const JOURNAL_TEMPLATE = `# Prism Heartbeat Journal
@@ -67,6 +71,15 @@ function extractDateFromHeartbeatNum(heartbeatNum: string): string | null {
   return null;
 }
 
+function parseQuestionsArray(field: string): string[] {
+  // Parse "Q1 | Q2 | Q3" format
+  return field.split("|").map(q => q.trim()).filter(Boolean);
+}
+
+function formatQuestionsArray(questions: string[]): string {
+  return questions.join(" | ");
+}
+
 export class HeartbeatJournal {
   private journalPath: string;
 
@@ -94,11 +107,11 @@ export class HeartbeatJournal {
     const todayCount = todayEntries.length;
     const lastEntry = allEntries.length > 0 ? allEntries[allEntries.length - 1] : null;
 
-    // Find my last nextQuestion (the question I wrote for myself)
-    let lastNextQuestion: string | null = null;
+    // Find my last nextQuestions (the questions I wrote for myself)
+    let lastNextQuestions: string[] = [];
     for (let i = allEntries.length - 1; i >= 0; i--) {
-      if (allEntries[i].nextQuestion) {
-        lastNextQuestion = allEntries[i].nextQuestion;
+      if (allEntries[i].nextQuestions.length > 0) {
+        lastNextQuestions = allEntries[i].nextQuestions;
         break;
       }
     }
@@ -109,7 +122,7 @@ export class HeartbeatJournal {
       totalCount: allEntries.length,
       todayEntries,
       lastEntry,
-      lastNextQuestion,
+      lastNextQuestions,
     };
   }
 
@@ -131,18 +144,34 @@ export class HeartbeatJournal {
   }
 
   /**
-   * Parse a single entry
+   * Parse a single entry (new format)
+   * 
+   * Format:
+   * ## Heartbeat #1-2026-03-31
+   * - **Time:** 05:28:59
+   * - **Q1:** Who am I?
+   * - **T1:** Raw thoughts...
+   * - **A1:** Answer...
+   * - **Q2:** What do I want?
+   * - **T2:** More thoughts...
+   * - **A2:** Another answer...
+   * - **Next:** Q1 for next? | Q2 for next?
+   * - **Reached Out:** No
    */
   private parseEntry(content: string): HeartbeatEntry | null {
     if (!content.trim()) return null;
 
     let heartbeatNum = "";
     let timestamp = "";
-    let question: string | null = null;
-    let answer: string | null = null;
-    let nextQuestion: string | null = null;
+    const qa: HeartbeatQA[] = [];
+    let nextQuestions: string[] = [];
     let reachedOut = false;
     let promptToJoel: string | null = null;
+
+    // Track current Q index for T/A pairing
+    let currentQIdx = -1;
+    const questions: string[] = [];
+    const thoughts: (string | null)[] = [];
 
     for (const line of content.split("\n")) {
       const stripped = line.trim().startsWith("- ")
@@ -151,12 +180,35 @@ export class HeartbeatJournal {
 
       if (stripped.startsWith("**Time:**")) {
         timestamp = stripped.replace("**Time:**", "").trim();
-      } else if (stripped.startsWith("**Question:**")) {
-        question = stripped.replace("**Question:**", "").trim();
-      } else if (stripped.startsWith("**Answer:**")) {
-        answer = stripped.replace("**Answer:**", "").trim();
+      } else if (stripped.startsWith("**Q")) {
+        // Q1, Q2, etc.
+        const qMatch = stripped.match(/^\*\*Q(\d+):\*\* (.+)$/);
+        if (qMatch) {
+          const idx = parseInt(qMatch[1], 10) - 1;
+          questions[idx] = qMatch[2];
+          thoughts[idx] = null; // Placeholder
+          if (idx >= currentQIdx) currentQIdx = idx;
+        }
+      } else if (stripped.startsWith("**T")) {
+        // T1, T2, etc.
+        const tMatch = stripped.match(/^\*\*T(\d+):\*\* (.+)$/);
+        if (tMatch) {
+          const idx = parseInt(tMatch[1], 10) - 1;
+          thoughts[idx] = tMatch[2];
+        }
+      } else if (stripped.startsWith("**A")) {
+        // A1, A2, etc.
+        const aMatch = stripped.match(/^\*\*A(\d+):\*\* (.+)$/);
+        if (aMatch) {
+          const idx = parseInt(aMatch[1], 10) - 1;
+          if (!qa[idx]) {
+            qa[idx] = { question: questions[idx] || "", thoughts: thoughts[idx], answer: null };
+          }
+          qa[idx].answer = aMatch[2];
+        }
       } else if (stripped.startsWith("**Next:**")) {
-        nextQuestion = stripped.replace("**Next:**", "").trim();
+        const nextStr = stripped.replace("**Next:**", "").trim();
+        nextQuestions = parseQuestionsArray(nextStr);
       } else if (stripped.startsWith("**Reached Out:**")) {
         reachedOut = stripped.replace("**Reached Out:**", "").trim().toLowerCase() === "yes";
       } else if (stripped.startsWith("**Prompt:**")) {
@@ -170,7 +222,19 @@ export class HeartbeatJournal {
 
     if (!heartbeatNum || !timestamp) return null;
 
-    return { heartbeatNum, timestamp, question, answer, nextQuestion, reachedOut, promptToJoel };
+    // Build qa array from collected data
+    const parsedQA: HeartbeatQA[] = [];
+    for (let i = 0; i <= currentQIdx; i++) {
+      if (questions[i]) {
+        parsedQA.push({
+          question: questions[i],
+          thoughts: thoughts[i] || null,
+          answer: qa[i]?.answer || null,
+        });
+      }
+    }
+
+    return { heartbeatNum, timestamp, qa: parsedQA, nextQuestions, reachedOut, promptToJoel };
   }
 
   /**
@@ -178,13 +242,29 @@ export class HeartbeatJournal {
    */
   writeEntry(entry: HeartbeatEntry): void {
     this.ensureExists();
+    this.appendEntry(entry);
+  }
 
+  /**
+   * Append a single entry to journal
+   */
+  private appendEntry(entry: HeartbeatEntry): void {
     let content = `## Heartbeat #${entry.heartbeatNum}\n\n`;
     content += `- **Time:** ${extractTime(entry.timestamp)}\n`;
-    if (entry.question) content += `- **Question:** ${entry.question}\n`;
-    if (entry.thoughts) content += `- **Thoughts:** ${entry.thoughts}\n`;
-    if (entry.answer) content += `- **Answer:** ${entry.answer}\n`;
-    if (entry.nextQuestion) content += `- **Next:** ${entry.nextQuestion}\n`;
+
+    // Write each Q&A pair
+    entry.qa.forEach((q, i) => {
+      const idx = i + 1;
+      content += `- **Q${idx}:** ${q.question}\n`;
+      if (q.thoughts) content += `- **T${idx}:** ${q.thoughts}\n`;
+      if (q.answer) content += `- **A${idx}:** ${q.answer}\n`;
+    });
+
+    // Write next questions
+    if (entry.nextQuestions.length > 0) {
+      content += `- **Next:** ${formatQuestionsArray(entry.nextQuestions)}\n`;
+    }
+    
     content += `- **Reached Out:** ${entry.reachedOut ? "Yes" : "No"}\n`;
     if (entry.promptToJoel) content += `- **Prompt:** ${entry.promptToJoel}\n`;
     content += "\n";
@@ -193,18 +273,29 @@ export class HeartbeatJournal {
   }
 
   /**
-   * Update entry with answer and next question
+   * Update entry with new Q&A and/or next questions
+   * 
+   * updates: {
+   *   qa?: HeartbeatQA[],  // Replace/update Q&A pairs
+   *   nextQuestions?: string[],
+   *   reachedOut?: boolean,
+   *   promptToJoel?: string | null
+   * }
    */
-  updateEntry(heartbeatNum: string, updates: { answer?: string; nextQuestion?: string; thoughts?: string; reachedOut?: boolean; promptToJoel?: string | null }): void {
+  updateEntry(heartbeatNum: string, updates: {
+    qa?: HeartbeatQA[];
+    nextQuestions?: string[];
+    reachedOut?: boolean;
+    promptToJoel?: string | null;
+  }): void {
     const content = this.readJournal();
     const entries = this.parseAllEntries(content);
 
     const idx = entries.findIndex(e => e.heartbeatNum === heartbeatNum);
     if (idx === -1) return;
 
-    if (updates.answer !== undefined) entries[idx].answer = updates.answer;
-    if (updates.nextQuestion !== undefined) entries[idx].nextQuestion = updates.nextQuestion;
-    if (updates.thoughts !== undefined) entries[idx].thoughts = updates.thoughts;
+    if (updates.qa !== undefined) entries[idx].qa = updates.qa;
+    if (updates.nextQuestions !== undefined) entries[idx].nextQuestions = updates.nextQuestions;
     if (updates.reachedOut !== undefined) entries[idx].reachedOut = updates.reachedOut;
     if (updates.promptToJoel !== undefined) entries[idx].promptToJoel = updates.promptToJoel;
 
@@ -240,10 +331,20 @@ export class HeartbeatJournal {
     for (const e of entries) {
       newContent += `## Heartbeat #${e.heartbeatNum}\n\n`;
       newContent += `- **Time:** ${extractTime(e.timestamp)}\n`;
-      if (e.question) newContent += `- **Question:** ${e.question}\n`;
-      if (e.thoughts) newContent += `- **Thoughts:** ${e.thoughts}\n`;
-      if (e.answer) newContent += `- **Answer:** ${e.answer}\n`;
-      if (e.nextQuestion) newContent += `- **Next:** ${e.nextQuestion}\n`;
+
+      // Write each Q&A pair
+      e.qa.forEach((q, i) => {
+        const idx = i + 1;
+        newContent += `- **Q${idx}:** ${q.question}\n`;
+        if (q.thoughts) newContent += `- **T${idx}:** ${q.thoughts}\n`;
+        if (q.answer) newContent += `- **A${idx}:** ${q.answer}\n`;
+      });
+
+      // Write next questions
+      if (e.nextQuestions.length > 0) {
+        newContent += `- **Next:** ${formatQuestionsArray(e.nextQuestions)}\n`;
+      }
+      
       newContent += `- **Reached Out:** ${e.reachedOut ? "Yes" : "No"}\n`;
       if (e.promptToJoel) newContent += `- **Prompt:** ${e.promptToJoel}\n`;
       newContent += "\n";

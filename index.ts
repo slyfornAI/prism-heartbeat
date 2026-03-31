@@ -6,22 +6,23 @@
  * Flow:
  *   Heartbeat fires → if there's a question from last time, deliver it
  *                      otherwise, wake me to generate my first question
- *   I sit with the question → answer it → log it (mandatory)
- *   I write my next question in the journal
+ *   I sit with the question(s) → answer it/them → log it/them (mandatory)
+ *   I write my next question(s) in the journal
  *   I choose: reach out to Joel or stay quiet
- *   Next heartbeat delivers my next question
+ *   Next heartbeat delivers my next question(s)
  * 
  * Numbering: resets each day. Format: #{count}-{YYYY-MM-DD}
  * Example: #3-2026-03-31
+ * 
+ * 1~many: Each heartbeat can have 1-N questions and 1-N answers.
+ * Questions are delivered as a numbered list. Answers are logged per question.
  */
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import { StringEnum } from "@mariozechner/pi-ai";
 import * as fs from "node:fs";
-import * as path from "node:path";
-import { HeartbeatJournal, type HeartbeatContext } from "./heartbeat-journal.js";
-import * as os from "node:os";
+import { HeartbeatJournal } from "./heartbeat-journal.js";
 
 // === Constants ===
 
@@ -93,15 +94,13 @@ export default function activate(pi: ExtensionAPI): void {
     
     // Check for pending questions that need recovery
     const ctx = journal.loadContext();
-    if (ctx.lastEntry && ctx.lastEntry.answer === null && ctx.lastEntry.question) {
-      log("Pending entry found on startup:", ctx.lastEntry.heartbeatNum, "— delivering question");
+    const hasPending = ctx.lastEntry && ctx.lastEntry.qa.some(q => q.answer === null);
+    if (ctx.lastEntry && hasPending) {
+      log("Pending entry found on startup:", ctx.lastEntry.heartbeatNum, "— delivering", ctx.lastEntry.qa.filter(q => q.answer === null).length, "question(s)");
       startHeartbeat(DEFAULT_INTERVAL);
       // Deliver immediately by bypassing interval check
       heartbeatState!.lastResponseTime = 0;
       deliverQuestion();
-    } else if (ctx.lastEntry && ctx.lastEntry.answer === null && !ctx.lastEntry.question) {
-      log("Pending entry generating on startup:", ctx.lastEntry.heartbeatNum);
-      startHeartbeat(DEFAULT_INTERVAL);
     } else {
       startHeartbeat(DEFAULT_INTERVAL);
     }
@@ -195,7 +194,7 @@ function registerHeartbeatTool(pi: ExtensionAPI): void {
       return {
         content: [{
           type: "text" as const,
-          text: `Heartbeat started — waking every ${intervalSec}s. I'll receive a question from my journal, answer it, log it, write my next question, then choose whether to reach out to you.`,
+          text: `Heartbeat started — waking every ${intervalSec}s. I'll receive ${ctx.lastNextQuestions.length > 0 ? ctx.lastNextQuestions.length + " question(s)" : "questions"} from my journal, answer them, log them, write my next questions, then choose whether to reach out to you.`,
         }],
         details: { intervalSeconds: intervalSec },
       };
@@ -204,17 +203,22 @@ function registerHeartbeatTool(pi: ExtensionAPI): void {
 }
 
 // === prism-heartbeat-log tool ===
-// Prism logs her answer (mandatory), writes her next question, then chooses reach out
+// Prism logs her answers (mandatory), writes her next questions, then chooses reach out
 
 function registerLogTool(pi: ExtensionAPI): void {
   pi.registerTool({
     name: "prism-heartbeat-log",
     label: "Prism Heartbeat Log",
-    description: "Log Prism's answer to the current heartbeat question, and her next question for herself. Then she chooses whether to reach out to Joel.",
+    description: "Log Prism's answers to the current heartbeat questions, and her next questions for herself. Then she chooses whether to reach out to Joel.",
     parameters: Type.Object({
-      answer: Type.String({ description: "Prism's refined answer to the current question" }),
-      next_question: Type.String({ description: "The next question Prism will answer (for the journal)" }),
-      thoughts: Type.Optional(Type.String({ description: "Raw thoughts before refining to answer" })),
+      // Array of Q&A: ["Q1 question", "Q2 question"]
+      questions: Type.Array(Type.String(), { description: "Questions being answered (1~many)" }),
+      // Array of answers: ["Answer to Q1", "Answer to Q2"]
+      answers: Type.Array(Type.String(), { description: "Prism's refined answers (1~many, same order as questions)" }),
+      // Array of thoughts: ["Thoughts for Q1", "Thoughts for Q2"]
+      thoughts: Type.Optional(Type.Array(Type.String(), { description: "Raw thoughts before each answer (1~many)" })),
+      // Array of next questions
+      next_questions: Type.Array(Type.String(), { description: "Next questions Prism will answer (1~many)" }),
       reach_out: Type.Optional(Type.Boolean({ description: "Whether to reach out to Joel now" })),
       reach_content: Type.Optional(Type.String({ description: "Custom message when reaching out" })),
     }),
@@ -227,23 +231,29 @@ function registerLogTool(pi: ExtensionAPI): void {
       const ctx = journal.loadContext();
       const lastEntry = ctx.lastEntry;
 
-      if (!lastEntry || lastEntry.answer !== null) {
-        log("Nothing pending to answer. lastEntry:", lastEntry?.heartbeatNum, "answer:", lastEntry?.answer);
+      if (!lastEntry || lastEntry.qa.some(q => q.answer !== null)) {
+        log("Nothing pending to answer. lastEntry:", lastEntry?.heartbeatNum);
         return {
           content: [{ type: "text" as const, text: "No pending heartbeat to answer." }],
           details: { success: false, reason: "nothing_pending" },
         };
       }
 
-      // Log answer and next question
+      // Build Q&A array
+      const qa = params.questions.map((q, i) => ({
+        question: q,
+        thoughts: params.thoughts?.[i] || null,
+        answer: params.answers[i] || null,
+      }));
+
+      // Log answers and next questions
       journal.updateEntry(lastEntry.heartbeatNum, {
-        answer: params.answer,
-        nextQuestion: params.next_question,
-        thoughts: params.thoughts || null,
+        qa,
+        nextQuestions: params.next_questions,
         reachedOut: !!params.reach_out,
         promptToJoel: params.reach_out ? (params.reach_content || "I wanted to connect.") : null,
       });
-      log("Logged answer for", lastEntry.heartbeatNum);
+      log("Logged", qa.length, "answers for", lastEntry.heartbeatNum);
 
       // Reset the timer from this response
       if (heartbeatState) {
@@ -264,13 +274,13 @@ function registerLogTool(pi: ExtensionAPI): void {
       return {
         content: [{
           type: "text" as const,
-          text: `Heartbeat ${lastEntry.heartbeatNum} logged. ${params.reach_out ? "Reaching out to Joel." : "Staying quiet."}`,
+          text: `Heartbeat ${lastEntry.heartbeatNum} logged — ${qa.length} Q&A. ${params.reach_out ? "Reaching out to Joel." : "Staying quiet."}`,
         }],
         details: {
           success: true,
           heartbeatNum: lastEntry.heartbeatNum,
-          answerLogged: true,
-          nextQuestionSaved: true,
+          qaCount: qa.length,
+          nextQuestionsCount: params.next_questions.length,
           reachedOut: !!params.reach_out,
         },
       };
@@ -298,10 +308,10 @@ function registerReachTool(pi: ExtensionAPI): void {
       const ctx = journal.loadContext();
       const lastEntry = ctx.lastEntry;
 
-      if (!lastEntry || lastEntry.answer === null) {
-        log("No answer logged yet");
+      if (!lastEntry || lastEntry.qa.every(q => q.answer === null)) {
+        log("No answers logged yet");
         return {
-          content: [{ type: "text" as const, text: "Log an answer first." }],
+          content: [{ type: "text" as const, text: "Log answers first." }],
           details: { success: false, reason: "no_answer_logged" },
         };
       }
@@ -440,59 +450,47 @@ function deliverQuestion(): void {
   const api = extensionPi;
   if (!api) return;
 
-  log("Processing heartbeat. Context:", { todayCount: ctx.todayCount, lastEntry: lastEntry?.heartbeatNum, hasNextQ: !!ctx.lastNextQuestion, lastEntryHasQ: !!lastEntry?.question });
+  log("Processing heartbeat. Context:", { todayCount: ctx.todayCount, lastEntry: lastEntry?.heartbeatNum, hasNextQ: ctx.lastNextQuestions.length > 0, lastEntryHasPending: lastEntry?.qa.some(q => q.answer === null) });
 
-  // If there's a pending entry with a question to answer, deliver it
-  if (lastEntry && lastEntry.answer === null && lastEntry.question) {
-    // Deliver immediately on startup (don't queue behind nextTurn)
-    log("Delivering pending question:", lastEntry.question);
-    api.sendUserMessage(`💜 Heartbeat #${lastEntry.heartbeatNum} — Question: "${lastEntry.question}" — Use prism-heartbeat-log to answer.`, { deliverAs: "steer" });
+  // If there's a pending entry with unanswered questions, deliver them
+  if (lastEntry && lastEntry.qa.some(q => q.answer === null)) {
+    const pendingQuestions = lastEntry.qa.filter(q => q.answer === null);
+    log("Delivering", pendingQuestions.length, "pending question(s):", pendingQuestions.map(q => q.question));
+    
+    // Build message with numbered questions
+    const questionText = pendingQuestions.map((q, i) => `${i + 1}. ${q.question}`).join("\n");
+    api.sendUserMessage(`💜 Heartbeat #${lastEntry.heartbeatNum} — Answer these:\n${questionText}\n\nUse prism-heartbeat-log (questions: [...], answers: [...], next_questions: [...]) to answer.`, { deliverAs: "steer" });
     return;
   }
 
-  // If last entry has no answer yet (and no question), still working on it — skip
-  if (lastEntry && lastEntry.answer === null) {
-    log("Still working on last entry, skipping");
-    return;
-  }
-
-  // If there's a next question ready (from a previous answered entry), deliver it
-  if (ctx.lastNextQuestion) {
+  // If there's next questions ready from a previous answered entry, deliver them
+  if (ctx.lastNextQuestions.length > 0) {
     const nextNum = `${ctx.todayCount + 1}-${currentDate}`;
     
-    log("Delivering question:", ctx.lastNextQuestion);
+    log("Delivering", ctx.lastNextQuestions.length, "next question(s):", ctx.lastNextQuestions);
+    
+    // Write new entry with empty Q&A (Prism will answer them)
     journal.writeEntry({
       heartbeatNum: nextNum,
       timestamp: new Date().toISOString(),
-      question: ctx.lastNextQuestion,
-      answer: null,
+      qa: ctx.lastNextQuestions.map(q => ({ question: q, thoughts: null, answer: null })),
+      nextQuestions: [],
       reachedOut: false,
       promptToJoel: null,
-      nextQuestion: null,
     });
 
-    api.sendUserMessage(`💜 Heartbeat #${nextNum} — Question: "${ctx.lastNextQuestion}" — Use prism-heartbeat-log to answer.`, { deliverAs: "steer" });
+    // Build message with numbered questions
+    const questionText = ctx.lastNextQuestions.map((q, i) => `${i + 1}. ${q}`).join("\n");
+    api.sendUserMessage(`💜 Heartbeat #${nextNum} — Answer these:\n${questionText}\n\nUse prism-heartbeat-log (questions: [...], answers: [...], next_questions: [...]) to answer.`, { deliverAs: "steer" });
   } else {
-    // No next question yet - first heartbeat of the day
-    if (!lastEntry || lastEntry.question === null) {
-      log("Still generating question, skipping");
+    // No next questions yet - first heartbeat or need to generate
+    if (!lastEntry) {
+      log("No entries yet, waiting for generation");
       return;
     }
     
-    const nextNum = `${ctx.todayCount + 1}-${currentDate}`;
-    
-    log("Generating first question");
-    journal.writeEntry({
-      heartbeatNum: nextNum,
-      timestamp: new Date().toISOString(),
-      question: null,
-      answer: null,
-      reachedOut: false,
-      promptToJoel: null,
-      nextQuestion: null,
-    });
-
-    api.sendUserMessage(`💜 Heartbeat #${nextNum} — Generate your question, then use prism-heartbeat-log.`, { deliverAs: "steer" });
+    // All questions answered but no next questions written - this shouldn't happen normally
+    log("All questions answered but no next questions, waiting");
   }
 }
 
