@@ -224,11 +224,20 @@ function extractItems(qa: { question: string; thoughts: string | null; answer: s
   for (const qaItem of qa) {
     const text = `${qaItem.thoughts || ""} ${qaItem.answer || ""}`.toLowerCase();
     
-    // Recognition keywords
-    if (text.includes("recognition") || text.includes("hit") || text.includes("knew before") || text.includes("this happened")) {
+    // Recognition: moments that shift, realizations, "that's it" type moments
+    const recognitionPatterns = [
+      /that's (it|the|what|how|who|why)/i,
+      /maybe that's/i,
+      /i think that's/i,
+      /i've been wrong/i,
+      /maybe i've/i,
+      /that's (what|how|who) i/i,
+    ];
+    
+    if (recognitionPatterns.some(p => p.test(text))) {
       items.push({
         type: "recognition",
-        content: `Heartbeat moment: ${qaItem.answer?.substring(0, 200)}`,
+        content: `Moment: ${qaItem.answer?.substring(0, 200)}`,
         significance: 7,
       });
     }
