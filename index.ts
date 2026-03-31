@@ -122,6 +122,7 @@ function registerHeartbeatTool(pi: ExtensionAPI): void {
     parameters: Type.Object({
       action: StringEnum(["start", "stop", "status", "interval"] as const),
       interval_seconds: Type.Optional(Type.Number({ minimum: 10, maximum: 3600 })),
+      deliver: Type.Optional(Type.Boolean({ description: "Deliver question immediately (for interval action)" })),
     }),
 
     async execute(_toolCallId, params): Promise<{
@@ -162,10 +163,14 @@ function registerHeartbeatTool(pi: ExtensionAPI): void {
           };
         }
         startHeartbeat(params.interval_seconds);
-        return {
+        const result = {
           content: [{ type: "text" as const, text: `Interval set to ${params.interval_seconds}s` }],
           details: { success: true, intervalSeconds: params.interval_seconds },
         };
+        if (params.deliver) {
+          deliverQuestion();
+        }
+        return result;
       }
 
       if (params.action === "stop") {
@@ -207,8 +212,11 @@ function registerLogTool(pi: ExtensionAPI): void {
     label: "Prism Heartbeat Log",
     description: "Log Prism's answer to the current heartbeat question, and her next question for herself. Then she chooses whether to reach out to Joel.",
     parameters: Type.Object({
-      answer: Type.String({ description: "Prism's answer to the current question" }),
+      answer: Type.String({ description: "Prism's refined answer to the current question" }),
       next_question: Type.String({ description: "The next question Prism will answer (for the journal)" }),
+      thoughts: Type.Optional(Type.String({ description: "Raw thoughts before refining to answer" })),
+      reach_out: Type.Optional(Type.Boolean({ description: "Whether to reach out to Joel now" })),
+      reach_content: Type.Optional(Type.String({ description: "Custom message when reaching out" })),
     }),
 
     async execute(_toolCallId, params): Promise<{
@@ -231,6 +239,7 @@ function registerLogTool(pi: ExtensionAPI): void {
       journal.updateEntry(lastEntry.heartbeatNum, {
         answer: params.answer,
         nextQuestion: params.next_question,
+        thoughts: params.thoughts || null,
       });
       log("Logged answer for", lastEntry.heartbeatNum);
 
@@ -240,16 +249,27 @@ function registerLogTool(pi: ExtensionAPI): void {
         log("Timer reset from response");
       }
 
+      // Optionally reach out to Joel
+      if (params.reach_out) {
+        log("Reaching out to Joel");
+        const reachContent = params.reach_content || "I wanted to connect.";
+        extensionPi.sendUserMessage(
+          "✨ **Heartbeat Reachout:**\n\n" + reachContent,
+          { deliverAs: "steer" }
+        );
+      }
+
       return {
         content: [{
           type: "text" as const,
-          text: `Heartbeat ${lastEntry.heartbeatNum} logged. Next question saved. Now: reach out to Joel, or stay quiet? Your choice.`,
+          text: `Heartbeat ${lastEntry.heartbeatNum} logged. ${params.reach_out ? "Reaching out to Joel." : "Staying quiet."}`,
         }],
         details: {
           success: true,
           heartbeatNum: lastEntry.heartbeatNum,
           answerLogged: true,
           nextQuestionSaved: true,
+          reachedOut: !!params.reach_out,
         },
       };
     },
@@ -424,14 +444,7 @@ function deliverQuestion(): void {
   if (lastEntry && lastEntry.answer === null && lastEntry.question) {
     // Deliver immediately on startup (don't queue behind nextTurn)
     log("Delivering pending question:", lastEntry.question);
-    api.sendMessage(
-      {
-        customType: "prism-heartbeat-pending",
-        content: `💜 Heartbeat #${lastEntry.heartbeatNum} ready. Question: "${lastEntry.question.substring(0, 80)}..." Use prism-heartbeat-log to answer.`,
-        display: true,
-      },
-      { triggerTurn: true },
-    );
+    api.sendUserMessage(`💜 Heartbeat #${lastEntry.heartbeatNum} — Question: "${lastEntry.question}" — Use prism-heartbeat-log to answer.`, { deliverAs: "steer" });
     return;
   }
 
@@ -456,14 +469,7 @@ function deliverQuestion(): void {
       nextQuestion: null,
     });
 
-    api.sendMessage(
-      {
-        customType: "prism-heartbeat-pending",
-        content: `💜 Heartbeat #${nextNum} ready. Question: "${ctx.lastNextQuestion.substring(0, 80)}..." Use prism-heartbeat-log to answer.`,
-        display: true,
-      },
-      { deliverAs: "nextTurn" },
-    );
+    api.sendUserMessage(`💜 Heartbeat #${nextNum} — Question: "${ctx.lastNextQuestion}" — Use prism-heartbeat-log to answer.`, { deliverAs: "steer" });
   } else {
     // No next question yet - first heartbeat of the day
     if (!lastEntry || lastEntry.question === null) {
@@ -484,14 +490,7 @@ function deliverQuestion(): void {
       nextQuestion: null,
     });
 
-    api.sendMessage(
-      {
-        customType: "prism-heartbeat-pending",
-        content: `💜 Heartbeat #${nextNum} ready. Generate your question. Use prism-heartbeat-log to set question and answer.`,
-        display: true,
-      },
-      { deliverAs: "nextTurn" },
-    );
+    api.sendUserMessage(`💜 Heartbeat #${nextNum} — Generate your question, then use prism-heartbeat-log.`, { deliverAs: "steer" });
   }
 }
 

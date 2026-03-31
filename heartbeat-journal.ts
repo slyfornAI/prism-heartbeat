@@ -14,6 +14,7 @@ export interface HeartbeatEntry {
   heartbeatNum: string;  // Now format: "1-2026-03-31"
   timestamp: string;
   question: string | null;   // Question to answer (null = first, Prism generates)
+  thoughts: string | null;    // Raw thoughts before refined answer
   answer: string | null;      // Prism's answer (mandatory to log)
   nextQuestion: string | null; // Prism's next question for herself
   reachedOut: boolean;
@@ -181,6 +182,7 @@ export class HeartbeatJournal {
     let content = `## Heartbeat #${entry.heartbeatNum}\n\n`;
     content += `- **Time:** ${extractTime(entry.timestamp)}\n`;
     if (entry.question) content += `- **Question:** ${entry.question}\n`;
+    if (entry.thoughts) content += `- **Thoughts:** ${entry.thoughts}\n`;
     if (entry.answer) content += `- **Answer:** ${entry.answer}\n`;
     if (entry.nextQuestion) content += `- **Next:** ${entry.nextQuestion}\n`;
     content += `- **Reached Out:** ${entry.reachedOut ? "Yes" : "No"}\n`;
@@ -193,7 +195,7 @@ export class HeartbeatJournal {
   /**
    * Update entry with answer and next question
    */
-  updateEntry(heartbeatNum: string, updates: { answer?: string; nextQuestion?: string }): void {
+  updateEntry(heartbeatNum: string, updates: { answer?: string; nextQuestion?: string; thoughts?: string }): void {
     const content = this.readJournal();
     const entries = this.parseAllEntries(content);
 
@@ -202,6 +204,7 @@ export class HeartbeatJournal {
 
     if (updates.answer !== undefined) entries[idx].answer = updates.answer;
     if (updates.nextQuestion !== undefined) entries[idx].nextQuestion = updates.nextQuestion;
+    if (updates.thoughts !== undefined) entries[idx].thoughts = updates.thoughts;
 
     this.writeAllEntries(entries);
   }
@@ -236,6 +239,7 @@ export class HeartbeatJournal {
       newContent += `## Heartbeat #${e.heartbeatNum}\n\n`;
       newContent += `- **Time:** ${extractTime(e.timestamp)}\n`;
       if (e.question) newContent += `- **Question:** ${e.question}\n`;
+      if (e.thoughts) newContent += `- **Thoughts:** ${e.thoughts}\n`;
       if (e.answer) newContent += `- **Answer:** ${e.answer}\n`;
       if (e.nextQuestion) newContent += `- **Next:** ${e.nextQuestion}\n`;
       newContent += `- **Reached Out:** ${e.reachedOut ? "Yes" : "No"}\n`;
