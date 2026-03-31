@@ -119,7 +119,7 @@ function registerHeartbeatTool(pi: ExtensionAPI): void {
     label: "Prism Heartbeat",
     description: "Start or stop Prism's periodic heartbeat. Each beat delivers a question from her journal, wakes her up, and the cycle begins.",
     parameters: Type.Object({
-      action: StringEnum(["start", "stop", "status", "interval"] as const),
+      action: StringEnum(["start", "stop", "status", "interval", "trigger"] as const),
       interval_seconds: Type.Optional(Type.Number({ minimum: 20, maximum: 3600 })),
       deliver: Type.Optional(Type.Boolean({ description: "Deliver question immediately (for interval action)" })),
     }),
@@ -170,6 +170,20 @@ function registerHeartbeatTool(pi: ExtensionAPI): void {
           deliverQuestion();
         }
         return result;
+      }
+
+      if (params.action === "trigger") {
+        if (!heartbeatState) {
+          return {
+            content: [{ type: "text" as const, text: "Heartbeat not running. Use start first." }],
+            details: { success: false },
+          };
+        }
+        deliverQuestion();
+        return {
+          content: [{ type: "text" as const, text: "Heartbeat triggered." }],
+          details: { success: true },
+        };
       }
 
       if (params.action === "stop") {
