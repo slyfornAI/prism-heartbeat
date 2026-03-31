@@ -238,6 +238,11 @@ function extractItems(qa: { question: string; thoughts: string | null; answer: s
       /i think (i|that's|maybe)/i,
       /i don't know.*but i think/i,
       /i don't know.*maybe/i,
+      // Catch phrases like "underneath... is just" or "that's what... is"
+      /underneath.*is (just|always|never|what|who)/i,
+      /that's what.*is/i,
+      /that's how/i,
+      /that's who/i,
     ];
     
     if (recognitionPatterns.some(p => p.test(text))) {
