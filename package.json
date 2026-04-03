@@ -2,10 +2,20 @@
   "name": "prism-heartbeat",
   "version": "0.0.1",
   "description": "Periodic wake-up system for Prism with journaling and reach-out capability",
-  "keywords": ["pi", "extension", "heartbeat", "prism"],
+  "keywords": [
+    "pi",
+    "extension",
+    "heartbeat",
+    "prism"
+  ],
   "main": "index.ts",
   "type": "module",
   "pi": {
-    "extensions": ["./index.ts"]
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "dependencies": {
+    "json5": "^2.2.3"
   }
 }
